@@ -1,8 +1,7 @@
-#!/usr/bin/env -S deno run --quiet --allow-run
+#!/usr/bin/env -S ${HOME}/.local/share/mise/shims/deno run --allow-all
 
 import $ from "dax";
 import yargs from "yargs";
-import { hideBin } from "yargs/helpers";
 
 type Win = Record<string, unknown>;
 
@@ -21,99 +20,78 @@ function getNum(o: Win, keys: string[]) {
   }
 }
 
-const argv = await yargs(hideBin(Deno.args))
-  .usage("Usage: $0 <next|prev> <app...>")
-  .command("next <app..>", "Cycle to next window of the given app(s)")
-  .command("prev <app..>", "Cycle to previous window of the given app(s)")
+const argv = await yargs(Deno.args)
+  .usage("Usage: $0 <next|prev> [--debug]")
+  .command("next", "Cycle to next window")
+  .command("prev", "Cycle to previous window")
   .option("debug", {
     alias: "d",
     type: "boolean",
     default: false,
     description: "Enable debug logging",
   })
-  .demandCommand(1, "dir (next|prev) and at least one app name are required")
+  .demandCommand(1, "direction (next|prev) is required")
   .strict()
   .help()
-  .parse();
+  .parseAsync();
+
+const dir = argv._[0] as string;
+if (!["next", "prev"].includes(dir)) {
+  console.error("direction must be next|prev");
+  Deno.exit(1);
+}
 
 const debug = (msg: string, ...data: unknown[]) => {
   if (argv.debug) console.debug(`[DEBUG] ${msg}`, ...data);
 };
 
-const [dir, ...apps] = argv._ as [string, ...string[]];
-if (!["next", "prev"].includes(dir)) {
-  console.error("dir must be next|prev");
+/* 1. フォーカス中のウィンドウ取得 */
+
+const focused: Win[] = JSON.parse(
+  await $`aerospace list-windows --focused --json`.text(),
+);
+if (!focused[0]) {
+  console.error("No focused window");
   Deno.exit(1);
 }
 
-const needles = apps.map((a) => String(a).toLowerCase());
-debug("dir=%s, apps=%o, needles=%o", dir, apps, needles);
+const focusedId = getNum(focused[0], ["window-id", "window_id", "id"]);
+const focusedApp = getStr(focused[0], ["app-name", "app_name", "app"]);
+debug("focusedId=%o, focusedApp=%s", focusedId, focusedApp);
 
-/* --------------------------
-   1. ウィンドウ一覧取得
---------------------------- */
+if (!focusedId || !focusedApp) {
+  console.error("Cannot determine focused window");
+  Deno.exit(1);
+}
+
+/* 2. 同一アプリのウィンドウ一覧取得 */
 
 const windows: Win[] = JSON.parse(
-  await $`aerospace list-windows --monitor focused --json`.text()
+  await $`aerospace list-windows --monitor focused --json`.text(),
 );
 debug("windows=%o", windows);
 
-/* --------------------------
-   2. フォーカス中取得
---------------------------- */
+const ids = windows
+  .filter(
+    (w) =>
+      getStr(w, ["app-name", "app_name", "app"])?.toLowerCase() ===
+      focusedApp.toLowerCase(),
+  )
+  .map((w) => getNum(w, ["window-id", "window_id", "id"])!)
+  .filter((id) => id !== undefined);
+debug("same app window ids=%o", ids);
 
-let focusedId: number | undefined;
-
-try {
-  const focused: Win[] = JSON.parse(
-    await $`aerospace list-windows --focused --json`.text()
-  );
-  if (focused[0]) {
-    focusedId = getNum(focused[0], ["window-id", "window_id", "id"]);
-  }
-  debug("focusedId=%o", focusedId);
-} catch {
-  debug("no focused window");
+if (ids.length <= 1) {
+  debug("only one window, nothing to cycle");
+  Deno.exit(0);
 }
 
-/* --------------------------
-   3. 対象アプリ絞り込み
---------------------------- */
+/* 3. 次のウィンドウにフォーカス */
 
-const targets = windows
-  .map((w) => {
-    const id = getNum(w, ["window-id", "window_id", "id"]);
-    const app =
-      getStr(w, ["app-name", "app_name", "app"])?.toLowerCase() ?? "";
-    return { id, app };
-  })
-  .filter((w) => w.id && needles.some((n) => w.app.includes(n)));
-
-debug("targets=%o", targets);
-
-if (targets.length === 0) {
-  console.error("No matching windows");
-  Deno.exit(1);
-}
-
-const ids = targets.map((t) => t.id!) as number[];
-
-const idx = focusedId ? ids.indexOf(focusedId) : -1;
-
-let nextId: number;
-if (idx < 0) {
-  nextId = ids[0];
-} else {
-  const n = ids.length;
-  nextId =
-    dir === "next"
-      ? ids[(idx + 1) % n]
-      : ids[(idx - 1 + n) % n];
-}
-
-/* --------------------------
-   4. フォーカス実行
---------------------------- */
-
+const idx = ids.indexOf(focusedId);
+const n = ids.length;
+const nextId =
+  dir === "next" ? ids[(idx + 1) % n] : ids[(idx - 1 + n) % n];
 debug("focusing window id=%d (idx=%d, dir=%s)", nextId, idx, dir);
+
 await $`aerospace focus --window-id ${nextId}`;
