@@ -1,0 +1,11 @@
+{
+  "tasks": {
+    "dev": "deno run --watch main.ts"
+  },
+  "imports": {
+    "@std/assert": "jsr:@std/assert@1",
+    "dax": "https://deno.land/x/dax/mod.ts",
+    "yargs": "npm:yargs@17",
+    "yargs/helpers": "npm:yargs@17/helpers"
+  }
+}
